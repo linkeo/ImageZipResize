@@ -1,6 +1,7 @@
 package flatten
 
 import (
+	"ImageZipResize/util/fileutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ func Expand(dir string) (err error) {
 	deflateLock.Lock()
 	defer deflateLock.Unlock()
 	deflateCache = make(map[string]bool)
-	files, err := scan(dir)
+	files, err := fileutil.ScanFiles(dir)
 	if err != nil {
 		return err
 	}

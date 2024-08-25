@@ -25,3 +25,9 @@ func Equal[T comparable](target T) func(value T) bool {
 		return value == target
 	}
 }
+
+func Not[T comparable](filter func(value T) bool) func(value T) bool {
+	return func(value T) bool {
+		return !filter(value)
+	}
+}

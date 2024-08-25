@@ -13,7 +13,7 @@ import (
 var rollbackLock sync.Mutex
 
 func Rollback(file string, desire image.Point, mode Mode) error {
-	if !isOriginBackupPath(file) {
+	if !IsOriginBackupPath(file) {
 		return errors.New("rollback not resized origin image")
 	}
 	predictExt, err := predictResizedExt(file, desire, mode)

@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 )
 
-var resizeTarget = image.Pt(1600, 1600)
+var resizeTarget = image.Pt(1440, 1440)
 
 type entry struct {
 	dir  string
@@ -23,8 +23,9 @@ type entry struct {
 }
 
 func main() {
-	files := slices.Filter(os.Args[1:], filters.PathIsRegularFile)
-	dirs := slices.Filter(os.Args[1:], filters.PathIsDirectory)
+	args := os.Args[1:]
+	files := slices.Filter(args, filters.PathIsRegularFile)
+	dirs := slices.Filter(args, filters.PathIsDirectory)
 	fmt.Println(os.Args, files, dirs)
 	entries := make([]entry, 0)
 	slices.ForEach(files, func(file string) {
@@ -33,15 +34,18 @@ func main() {
 	})
 	slices.ForEach(dirs, func(dir string) {
 		parent := filepath.Dir(dir)
-		files, err := fileutil.ScanFiles(dir)
+		found, err := fileutil.ScanFiles(dir)
 		if err != nil {
 			log.Printf("scan files %s failed, %s", dir, err)
 			return
 		}
-		slices.ForEach(files, func(file string) {
+		slices.ForEach(found, func(file string) {
 			entries = append(entries, entry{dir: parent, file: file})
 		})
 	})
+	files = slices.Filter(files, imagetool.IsSupportedImageFile)
+	files = slices.Filter(files, filters.Not(imagetool.IsOriginBackupPath))
+	files = slices.Filter(files, filters.Not(imagetool.IsResizedPath))
 	total := len(entries)
 	curr := new(atomic.Int64)
 	curr.Store(0)
@@ -55,7 +59,7 @@ func main() {
 
 func resize(tag, base, file string) {
 	log.Printf("[%s] %s resizing %s", tag, resizeTarget, file)
-	err := imagetool.Resize(base, file, resizeTarget, imagetool.ModeInner.DoNotEnlarge())
+	err := imagetool.Resize(base, file, resizeTarget, imagetool.ModeOuter.DoNotEnlarge())
 	if err != nil {
 		log.Printf("[%s] resize %s failed, %s", tag, file, err)
 	}

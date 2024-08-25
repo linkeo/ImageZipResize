@@ -1,20 +1,21 @@
 package main
 
 import (
-	"ImageZipResize/tool/imagetool"
 	"ImageZipResize/util/concurrent"
 	"ImageZipResize/util/fileutil"
 	"ImageZipResize/util/filters"
 	"ImageZipResize/util/slices"
 	"fmt"
-	"image"
 	"log"
 	"os"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"sync/atomic"
+	"time"
 )
 
-var resizeTarget = image.Pt(1600, 1600)
+var datePrefixedPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}\D`)
 
 func main() {
 	args := os.Args[1:]
@@ -31,8 +32,7 @@ func main() {
 			files = append(files, file)
 		})
 	})
-	files = slices.Filter(files, imagetool.IsSupportedImageFile)
-	files = slices.Filter(files, imagetool.IsOriginBackupPath)
+	files = slices.Filter(files, filters.Not(isDatePrefixed))
 	total := len(files)
 	curr := new(atomic.Int64)
 	curr.Store(0)
@@ -40,14 +40,35 @@ func main() {
 	concurrent.ForEach(files, func(file string) {
 		i := curr.Add(1)
 		tag := fmt.Sprintf("%d/%d", i, total)
-		rollback(tag, file)
+		rename(tag, file)
 	}, runtime.NumCPU()-1)
 }
 
-func rollback(tag, file string) {
-	log.Printf("[%s] rollback %s", tag, file)
-	err := imagetool.Rollback(file, resizeTarget, imagetool.ModeInner.DoNotEnlarge())
+func rename(tag string, path string) {
+	target, err := toDatePrefixed(path)
 	if err != nil {
-		log.Printf("[%s] rollback %s failed, %s", tag, file, err)
+		log.Printf("[%s] failed to get prefixed name, %s", tag, err)
+		return
 	}
+	if err := os.Rename(path, target); err != nil {
+		log.Printf("[%s] failed to rename %s to %s, %s", tag, path, target, err)
+		return
+	}
+	log.Printf("[%s] rename %s to %s", tag, path, target)
+}
+
+func isDatePrefixed(path string) bool {
+	name := filepath.Base(path)
+	return datePrefixedPattern.MatchString(name)
+}
+
+func toDatePrefixed(path string) (string, error) {
+	name := filepath.Base(path)
+	dir := filepath.Dir(path)
+	stat, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	prefix := stat.ModTime().Format(time.DateOnly) + " "
+	return filepath.Join(dir, prefix+name), nil
 }

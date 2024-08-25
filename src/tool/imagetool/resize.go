@@ -1,11 +1,15 @@
 package imagetool
 
 import (
+	"archive/zip"
 	"errors"
 	"fmt"
 	"image"
+	"image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
+	"os"
 
 	"github.com/disintegration/imaging"
 	_ "golang.org/x/image/bmp"
@@ -39,8 +43,11 @@ func (m Mode) DoNotEnlarge() Mode {
 }
 
 func Resize(base string, filename string, to image.Point, mode Mode) error {
-	if isResizedPath(filename) {
+	if IsResizedPath(filename) {
 		return nil
+	}
+	if isZipFile(filename) {
+		return resizeImagesInZip(base, filename, to, mode)
 	}
 	isGif, err := isGifImage(filename)
 	if err != nil {
@@ -50,6 +57,47 @@ func Resize(base string, filename string, to image.Point, mode Mode) error {
 		return resizeGIF(base, filename, to, mode)
 	}
 	return resizeStatic(base, filename, to, mode)
+}
+
+func resizeImagesInZip(base string, filename string, to image.Point, mode Mode) error {
+	ok, err := scanZipFile(filename)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		// skip zip files without images
+		return nil
+	}
+	src, err := zip.OpenReader(filename)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dstFile, err := os.Create(getResizedName(filename, extZip))
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+	dst := zip.NewWriter(dstFile)
+	defer dst.Close()
+	for _, file := range src.Reader.File {
+		if !IsSupportedImageFile(file.Name) {
+			srcItem, err := file.OpenRaw()
+			if err != nil {
+				return err
+			}
+			dstItem, err := dst.CreateRaw(&file.FileHeader)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(dstItem, srcItem); err != nil {
+				return err
+			}
+			continue
+		}
+
+	}
+	return nil
 }
 
 func resizeGIF(base string, filename string, to image.Point, mode Mode) error {
@@ -67,7 +115,30 @@ func resizeGIF(base string, filename string, to image.Point, mode Mode) error {
 			return err
 		}
 	}
-	return writeResizedGIFImage(base, filename, img)
+	if err := backupOriginFile(base, filename); err != nil {
+		return err
+	}
+	writer := newGIFWriter(img)
+	creator := fileCreator(getResizedName(filename, extGIF))
+	return writer(creator)
+}
+
+func resizeGif(reader io.Reader, to image.Point, mode Mode) (ImageWriter, error) {
+	img, err := gif.DecodeAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	for i, origin := range img.Image {
+		result, err := resize(origin, to, mode)
+		if err != nil {
+			return nil, err
+		}
+		img.Image[i], err = toPalettedImage(result)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return newGIFWriter(img), nil
 }
 
 func resizeStatic(base string, filename string, to image.Point, mode Mode) error {
