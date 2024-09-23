@@ -3,7 +3,6 @@ package imagetool
 import (
 	"bufio"
 	"bytes"
-	"fmt"
 	"image"
 	"image/gif"
 	"os"
@@ -52,7 +51,6 @@ func isGifImage(filename string) (bool, error) {
 	}
 
 	for _, ver := range gifVersions {
-		fmt.Printf("gif peek %x %x\n", peek, ver)
 		if bytes.Equal(peek, ver) {
 			return true, nil
 		}
