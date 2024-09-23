@@ -17,8 +17,8 @@ import (
 )
 
 type Mode struct {
-	sizing    sizingMode
-	enlarging bool
+	sizing      sizingMode
+	noEnlarging bool
 }
 
 type sizingMode string
@@ -38,7 +38,7 @@ var (
 )
 
 func (m Mode) DoNotEnlarge() Mode {
-	m.enlarging = true
+	m.noEnlarging = true
 	return m
 }
 
@@ -46,9 +46,9 @@ func Resize(base string, filename string, to image.Point, mode Mode) error {
 	if IsResizedPath(filename) {
 		return nil
 	}
-	if isZipFile(filename) {
-		return resizeImagesInZip(base, filename, to, mode)
-	}
+	//if isZipFile(filename) {
+	//	return resizeImagesInZip(base, filename, to, mode)
+	//}
 	isGif, err := isGifImage(filename)
 	if err != nil {
 		return err
@@ -206,7 +206,7 @@ func getTargetSizeFloat(from FloatPoint, to FloatPoint, mode Mode) (result Float
 		err = fmt.Errorf("unknown getTargetSize mode %s", mode.sizing)
 		return
 	}
-	if !mode.enlarging && scale > 1.0 {
+	if mode.noEnlarging && scale > 1.0 {
 		scale = 1.0
 	}
 	result = from.Mul(scale)

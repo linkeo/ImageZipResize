@@ -3,12 +3,13 @@ package imagetool
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"image"
 	"image/gif"
 	"os"
 )
 
-var gifMagic = []byte("GIF8?a")
+var gifVersions = [][]byte{[]byte("GIF87a"), []byte("GIF89a")}
 
 func loadImageConfig(filename string) (conf image.Config, format string, err error) {
 	reader, err := os.Open(filename)
@@ -45,9 +46,16 @@ func isGifImage(filename string) (bool, error) {
 	}
 	defer reader.Close()
 	buf := bufio.NewReader(reader)
-	peek, err := buf.Peek(len(gifMagic))
+	peek, err := buf.Peek(len(gifVersions[0]))
 	if err != nil {
 		return false, err
 	}
-	return bytes.Equal(peek, gifMagic), nil
+
+	for _, ver := range gifVersions {
+		fmt.Printf("gif peek %x %x\n", peek, ver)
+		if bytes.Equal(peek, ver) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
