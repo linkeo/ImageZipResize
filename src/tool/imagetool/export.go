@@ -110,46 +110,86 @@ func backupOriginFile(base, from string) error {
 	return os.Rename(from, to)
 }
 
-func writeResizedRGBImage(base, originFilename string, img image.Image) error {
-	if err := backupOriginFile(base, originFilename); err != nil {
-		return err
+func backupOrKeepOrigin(base, from string, to string) (float64, error) {
+	fromStat, err := os.Stat(from)
+	if err != nil {
+		return 0, err
 	}
+	toStat, err := os.Stat(to)
+	if err != nil {
+		return 0, err
+	}
+	result := float64(toStat.Size()) / float64(fromStat.Size())
+	if result < 1 {
+		if err := backupOriginFile(base, from); err != nil {
+			return 0, err
+		}
+		return result, nil
+	}
+	if err := os.Rename(from, to); err != nil {
+		return 0, err
+	}
+	return result, nil
+}
+
+func writeResizedRGBImage(base, originFilename string, img image.Image) (float64, error) {
 	toPath := getResizedName(originFilename, extJPEG)
 	toFile, err := os.Create(toPath)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer toFile.Close()
 	exportLock.Lock()
 	defer exportLock.Unlock()
-	return jpeg.Encode(toFile, img, &jpeg.Options{Quality: 85})
+	if err := jpeg.Encode(toFile, img, &jpeg.Options{Quality: 85}); err != nil {
+		return 0, err
+	}
+	toFile.Close()
+	return backupOrKeepOrigin(base, originFilename, toPath)
 }
 
-func writeResizedRGBAImage(base, originFilename string, img image.Image) error {
-	if err := backupOriginFile(base, originFilename); err != nil {
-		return err
-	}
+func writeResizedRGBAImage(base, originFilename string, img image.Image) (float64, error) {
 	toPath := getResizedName(originFilename, extPNG)
 	toFile, err := os.Create(toPath)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer toFile.Close()
 	exportLock.Lock()
 	defer exportLock.Unlock()
-	return png.Encode(toFile, img)
+	if err := png.Encode(toFile, img); err != nil {
+		return 0, err
+	}
+	toFile.Close()
+	return backupOrKeepOrigin(base, originFilename, toPath)
 }
 
-func writeResizedGIFImage(creator ImageCreator, img *gif.GIF) error {
-	file, err := creator()
+func writeResizedGIFImage(base, originFilename string, img *gif.GIF) (float64, error) {
+	toPath := getResizedName(originFilename, extGIF)
+	toFile, err := os.Create(toPath)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	defer file.Close()
+	defer toFile.Close()
 	exportLock.Lock()
 	defer exportLock.Unlock()
-	return gif.EncodeAll(file, img)
+	if err := gif.EncodeAll(toFile, img); err != nil {
+		return 0, err
+	}
+	toFile.Close()
+	return backupOrKeepOrigin(base, originFilename, toPath)
 }
+
+//func writeResizedGIFImage(creator ImageCreator, img *gif.GIF) error {
+//	file, err := creator()
+//	if err != nil {
+//		return err
+//	}
+//	defer file.Close()
+//	exportLock.Lock()
+//	defer exportLock.Unlock()
+//	return gif.EncodeAll(file, img)
+//}
 
 func newGIFWriter(img *gif.GIF) ImageWriter {
 	return func(creator ImageCreator) error {

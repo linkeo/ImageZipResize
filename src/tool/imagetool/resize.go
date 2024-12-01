@@ -42,16 +42,16 @@ func (m Mode) DoNotEnlarge() Mode {
 	return m
 }
 
-func Resize(base string, filename string, to image.Point, mode Mode) error {
+func Resize(base string, filename string, to image.Point, mode Mode) (float64, error) {
 	if IsResizedPath(filename) {
-		return nil
+		return 1, nil
 	}
 	//if isZipFile(filename) {
 	//	return resizeImagesInZip(base, filename, to, mode)
 	//}
 	isGif, err := isGifImage(filename)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if isGif {
 		return resizeGIF(base, filename, to, mode)
@@ -100,27 +100,28 @@ func resizeImagesInZip(base string, filename string, to image.Point, mode Mode) 
 	return nil
 }
 
-func resizeGIF(base string, filename string, to image.Point, mode Mode) error {
+func resizeGIF(base string, filename string, to image.Point, mode Mode) (float64, error) {
 	img, err := loadGifImage(filename)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for i, origin := range img.Image {
 		result, err := resize(origin, to, mode)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		img.Image[i], err = toPalettedImage(result)
 		if err != nil {
-			return err
+			return 0, err
 		}
 	}
-	if err := backupOriginFile(base, filename); err != nil {
-		return err
-	}
-	writer := newGIFWriter(img)
-	creator := fileCreator(getResizedName(filename, extGIF))
-	return writer(creator)
+	return writeResizedGIFImage(base, filename, img)
+	//if err := backupOriginFile(base, filename); err != nil {
+	//	return err
+	//}
+	//writer := newGIFWriter(img)
+	//creator := fileCreator(getResizedName(filename, extGIF))
+	//return writer(creator)
 }
 
 func resizeGif(reader io.Reader, to image.Point, mode Mode) (ImageWriter, error) {
@@ -141,19 +142,36 @@ func resizeGif(reader io.Reader, to image.Point, mode Mode) (ImageWriter, error)
 	return newGIFWriter(img), nil
 }
 
-func resizeStatic(base string, filename string, to image.Point, mode Mode) error {
+func resizeStatic(base string, filename string, to image.Point, mode Mode) (float64, error) {
 	img, err := loadStaticImage(filename)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	result, err := resize(img, to, mode)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if result.Opaque() {
+	if almostOpaque(result) {
 		return writeResizedRGBImage(base, filename, result)
 	}
 	return writeResizedRGBAImage(base, filename, result)
+}
+
+func almostOpaque(p *image.NRGBA) bool {
+	if p.Rect.Empty() {
+		return true
+	}
+	i0, i1 := 3, p.Rect.Dx()*4
+	for y := p.Rect.Min.Y; y < p.Rect.Max.Y; y++ {
+		for i := i0; i < i1; i += 4 {
+			if p.Pix[i] < 0xf0 {
+				return false
+			}
+		}
+		i0 += p.Stride
+		i1 += p.Stride
+	}
+	return true
 }
 
 func resize(img image.Image, desire image.Point, mode Mode) (*image.NRGBA, error) {

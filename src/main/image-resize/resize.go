@@ -58,9 +58,21 @@ func main() {
 }
 
 func resize(tag, base, file string) {
-	log.Printf("[%s] %s resizing %s", tag, resizeTarget, file)
-	err := imagetool.Resize(base, file, resizeTarget, imagetool.ModeOuter.DoNotEnlarge())
+	result, err := imagetool.Resize(base, file, resizeTarget, imagetool.ModeOuter.DoNotEnlarge())
 	if err != nil {
-		log.Printf("[%s] resize %s failed, %s", tag, file, err)
+		log.Printf("[%s] %s resize %s failed, %s", tag, resizeTarget, file, err)
+	} else {
+		log.Printf("[%s] %s resize %s succeeded. %s", tag, resizeTarget, file, compressRate(result))
 	}
+}
+
+func compressRate(rate float64) string {
+	deltaPercent := (rate - 1) * 100
+	if deltaPercent == 0.0 {
+		return "-"
+	}
+	if deltaPercent < 0.0 {
+		return fmt.Sprintf("%.2f%%", deltaPercent)
+	}
+	return fmt.Sprintf("+%.2f%%", deltaPercent)
 }
