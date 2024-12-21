@@ -12,6 +12,7 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,7 +42,7 @@ var supportedFileExt = map[string]bool{
 	extWEBP:      true,
 }
 
-func IsSupportedImageFile(filename string) bool {
+func IsSupportedImageFilename(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
 	return supportedFileExt[ext]
 }
@@ -105,7 +106,7 @@ func backupOriginFile(base, from string) error {
 		return err
 	}
 	if isExist {
-		return errors.New("origin file already exists")
+		return os.Rename(from, to+".backup")
 	}
 	return os.Rename(from, to)
 }
@@ -120,16 +121,18 @@ func backupOrKeepOrigin(base, from string, to string) (float64, error) {
 		return 0, err
 	}
 	result := float64(toStat.Size()) / float64(fromStat.Size())
+	//return result, nil
 	if result < 1 {
 		if err := backupOriginFile(base, from); err != nil {
 			return 0, err
 		}
 		return result, nil
 	}
-	if err := os.Rename(from, to); err != nil {
+	os.Remove(to)
+	if err := os.Rename(from, getResizedName(from, path.Ext(from))); err != nil {
 		return 0, err
 	}
-	return result, nil
+	return 1, nil
 }
 
 func writeResizedRGBImage(base, originFilename string, img image.Image) (float64, error) {
@@ -215,7 +218,7 @@ func scanZipFile(filename string) (bool, error) {
 	}
 	defer reader.Close()
 	for _, file := range reader.Reader.File {
-		if IsSupportedImageFile(file.Name) {
+		if IsSupportedImageFilename(file.Name) {
 			return true, nil
 		}
 	}

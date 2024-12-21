@@ -31,7 +31,7 @@ func main() {
 			files = append(files, file)
 		})
 	})
-	files = slices.Filter(files, imagetool.IsSupportedImageFile)
+	files = slices.Filter(files, imagetool.IsSupportedImageFilename)
 	files = slices.Filter(files, imagetool.IsOriginBackupPath)
 	total := len(files)
 	curr := new(atomic.Int64)
@@ -46,7 +46,7 @@ func main() {
 
 func rollback(tag, file string) {
 	log.Printf("[%s] rollback %s", tag, file)
-	err := imagetool.Rollback(file, resizeTarget, imagetool.ModeInner.DoNotEnlarge())
+	err := imagetool.Rollback(file, resizeTarget, imagetool.ModeContain.DoNotEnlarge())
 	if err != nil {
 		log.Printf("[%s] rollback %s failed, %s", tag, file, err)
 	}

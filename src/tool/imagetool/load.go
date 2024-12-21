@@ -1,14 +1,24 @@
 package imagetool
 
 import (
-	"bufio"
-	"bytes"
+	"golang.org/x/image/bmp"
+	"golang.org/x/image/tiff"
+	"golang.org/x/image/webp"
 	"image"
 	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"os"
 )
 
-var gifVersions = [][]byte{[]byte("GIF87a"), []byte("GIF89a")}
+func init() {
+	_ = webp.Decode
+	_ = gif.Decode
+	_ = tiff.Decode
+	_ = jpeg.Decode
+	_ = png.Decode
+	_ = bmp.Decode
+}
 
 func loadImageConfig(filename string) (conf image.Config, format string, err error) {
 	reader, err := os.Open(filename)
@@ -39,21 +49,14 @@ func loadGifImage(filename string) (*gif.GIF, error) {
 }
 
 func isGifImage(filename string) (bool, error) {
-	reader, err := os.Open(filename)
+	_, f, err := loadImageConfig(filename)
 	if err != nil {
 		return false, err
 	}
-	defer reader.Close()
-	buf := bufio.NewReader(reader)
-	peek, err := buf.Peek(len(gifVersions[0]))
-	if err != nil {
-		return false, err
-	}
+	return f == "gif", nil
+}
 
-	for _, ver := range gifVersions {
-		if bytes.Equal(peek, ver) {
-			return true, nil
-		}
-	}
-	return false, nil
+func IsImageFile(filename string) bool {
+	_, _, err := loadImageConfig(filename)
+	return err == nil
 }

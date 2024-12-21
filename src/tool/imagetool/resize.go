@@ -1,19 +1,22 @@
 package imagetool
 
 import (
+	"ImageZipResize/util/fileutil"
+	"ImageZipResize/util/system"
 	"archive/zip"
 	"errors"
 	"fmt"
+	"github.com/disintegration/imaging"
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/webp"
 	"image"
 	"image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
 	"os"
-
-	"github.com/disintegration/imaging"
-	_ "golang.org/x/image/bmp"
-	_ "golang.org/x/image/webp"
+	"os/exec"
+	"path"
 )
 
 type Mode struct {
@@ -24,17 +27,21 @@ type Mode struct {
 type sizingMode string
 
 const (
-	sizingOuter    sizingMode = "outer"
-	sizingInner    sizingMode = "inner"
+	sizingStretch  sizingMode = "stretch"
+	sizingFill     sizingMode = "fill"
+	sizingContain  sizingMode = "contain"
+	sizingCover    sizingMode = "cover"
 	sizingByWidth  sizingMode = "width"
 	sizingByHeight sizingMode = "height"
 )
 
 var (
-	ModeOuter  = Mode{sizing: sizingOuter}
-	ModeInner  = Mode{sizing: sizingInner}
-	ModeWidth  = Mode{sizing: sizingByWidth}
-	ModeHeight = Mode{sizing: sizingByHeight}
+	ModeStretch = Mode{sizing: sizingStretch}
+	ModeFill    = Mode{sizing: sizingFill}
+	ModeContain = Mode{sizing: sizingContain}
+	ModeCover   = Mode{sizing: sizingCover}
+	ModeWidth   = Mode{sizing: sizingByWidth}
+	ModeHeight  = Mode{sizing: sizingByHeight}
 )
 
 func (m Mode) DoNotEnlarge() Mode {
@@ -42,21 +49,25 @@ func (m Mode) DoNotEnlarge() Mode {
 	return m
 }
 
-func Resize(base string, filename string, to image.Point, mode Mode) (float64, error) {
+func Resize(base string, filename string, isCover bool, to image.Point, mode Mode) (float64, error) {
 	if IsResizedPath(filename) {
-		return 1, nil
+		return 0, errors.New("file is already resized")
 	}
 	//if isZipFile(filename) {
 	//	return resizeImagesInZip(base, filename, to, mode)
 	//}
-	isGif, err := isGifImage(filename)
-	if err != nil {
-		return 0, err
+	if !IsImageFile(filename) {
+		return 0, errors.New("file is not an image")
 	}
-	if isGif {
-		return resizeGIF(base, filename, to, mode)
-	}
-	return resizeStatic(base, filename, to, mode)
+	return resizeMagick(base, filename, isCover, to, mode)
+	//isGif, err := isGifImage(filename)
+	//if err != nil {
+	//	return 0, err
+	//}
+	//if isGif {
+	//	return resizeGIF(base, filename, to, mode)
+	//}
+	//return resizeStatic(base, filename, to, mode)
 }
 
 func resizeImagesInZip(base string, filename string, to image.Point, mode Mode) error {
@@ -81,7 +92,7 @@ func resizeImagesInZip(base string, filename string, to image.Point, mode Mode) 
 	dst := zip.NewWriter(dstFile)
 	defer dst.Close()
 	for _, file := range src.Reader.File {
-		if !IsSupportedImageFile(file.Name) {
+		if !IsSupportedImageFilename(file.Name) {
 			srcItem, err := file.OpenRaw()
 			if err != nil {
 				return err
@@ -105,16 +116,15 @@ func resizeGIF(base string, filename string, to image.Point, mode Mode) (float64
 	if err != nil {
 		return 0, err
 	}
+	resolveGifDisposals(img)
 	for i, origin := range img.Image {
 		result, err := resize(origin, to, mode)
 		if err != nil {
 			return 0, err
 		}
-		img.Image[i], err = toPalettedImage(result)
-		if err != nil {
-			return 0, err
-		}
+		img.Image[i] = toPalettedImage(result, origin.Palette)
 	}
+	optimizeDisposalGif(img)
 	return writeResizedGIFImage(base, filename, img)
 	//if err := backupOriginFile(base, filename); err != nil {
 	//	return err
@@ -129,17 +139,68 @@ func resizeGif(reader io.Reader, to image.Point, mode Mode) (ImageWriter, error)
 	if err != nil {
 		return nil, err
 	}
+	resolveGifDisposals(img)
 	for i, origin := range img.Image {
 		result, err := resize(origin, to, mode)
 		if err != nil {
 			return nil, err
 		}
-		img.Image[i], err = toPalettedImage(result)
-		if err != nil {
-			return nil, err
-		}
+		img.Image[i] = toPalettedImage(result, origin.Palette)
 	}
+	optimizeDisposalGif(img)
 	return newGIFWriter(img), nil
+}
+
+func resizeMagick(base string, filename string, isCover bool, to image.Point, mode Mode) (float64, error) {
+	ext := extWEBP
+	if isCover {
+		ext = path.Ext(filename)
+	}
+	toPath := getResizedName(filename, ext)
+	cmd := exec.Command("magick", filename, "-strip", "-coalesce", "-resize", magickResizeOption(to, mode), "-quality", "90", "-define", "webp:near-lossless=90", toPath)
+	tmp, err := fileutil.GetTempDir(base, filename)
+	if err != nil {
+		return 0, err
+	}
+	defer os.RemoveAll(tmp)
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("MAGICK_MEMORY_LIMIT=%s", system.GetMemoryLimit()),
+		fmt.Sprintf("MAGICK_MAP_LIMIT=%s", system.GetMemoryLimit()),
+		fmt.Sprintf("MAGICK_DISK_LIMIT=%s", system.GetMemoryLimit()),
+		fmt.Sprintf("MAGICK_TEMPORARY_PATH=%s", tmp))
+	//log.Printf("command: %s", strings.Join(cmd.Args, " "))
+	if err := cmd.Run(); err != nil {
+		os.Remove(toPath)
+		return 0, err
+	}
+	return backupOrKeepOrigin(base, filename, toPath)
+}
+
+func magickResizeOption(size image.Point, mode Mode) string {
+	switch mode.sizing {
+	case sizingContain:
+		if mode.noEnlarging {
+			return fmt.Sprintf("%dx%d>", size.X, size.Y)
+		}
+		return fmt.Sprintf("%dx%d", size.X, size.Y)
+	case sizingByWidth:
+		if mode.noEnlarging {
+			return fmt.Sprintf("%dx>", size.X)
+		}
+		return fmt.Sprintf("%dx", size.X)
+	case sizingByHeight:
+		if mode.noEnlarging {
+			return fmt.Sprintf("x%d>", size.Y)
+		}
+		return fmt.Sprintf("x%d", size.Y)
+	case sizingStretch:
+		return fmt.Sprintf("%dx%d!", size.X, size.Y)
+	case sizingFill:
+		return fmt.Sprintf("%dx%d^", size.X, size.Y)
+	case sizingCover:
+		return fmt.Sprintf("%dx%d<", size.X, size.Y)
+	}
+	return fmt.Sprintf("%dx%d", size.X, size.Y)
 }
 
 func resizeStatic(base string, filename string, to image.Point, mode Mode) (float64, error) {
@@ -157,27 +218,29 @@ func resizeStatic(base string, filename string, to image.Point, mode Mode) (floa
 	return writeResizedRGBAImage(base, filename, result)
 }
 
-func almostOpaque(p *image.NRGBA) bool {
-	if p.Rect.Empty() {
+func almostOpaque(p image.Image) bool {
+	if p.Bounds().Empty() {
 		return true
 	}
-	i0, i1 := 3, p.Rect.Dx()*4
-	for y := p.Rect.Min.Y; y < p.Rect.Max.Y; y++ {
-		for i := i0; i < i1; i += 4 {
-			if p.Pix[i] < 0xf0 {
+	for x := p.Bounds().Min.X; x < p.Bounds().Max.X; x++ {
+		for y := p.Bounds().Min.Y; y < p.Bounds().Max.Y; y++ {
+			c := p.At(x, y)
+			_, _, _, a := c.RGBA()
+			if a <= 0xf0 {
 				return false
 			}
 		}
-		i0 += p.Stride
-		i1 += p.Stride
 	}
 	return true
 }
 
-func resize(img image.Image, desire image.Point, mode Mode) (*image.NRGBA, error) {
+func resize(img image.Image, desire image.Point, mode Mode) (image.Image, error) {
 	from := img.Bounds().Size()
 	//log.Printf("from=%s desire=%s", from, desire)
 	target, err := getTargetSize(from, desire, mode)
+	if from == target {
+		return img, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -212,14 +275,15 @@ func getTargetSizeFloat(from FloatPoint, to FloatPoint, mode Mode) (result Float
 	scalePoint := to.DivPoint(from)
 	var scale float64
 	switch mode.sizing {
-	case sizingOuter:
+	case sizingCover:
 		scale = max(scalePoint.X, scalePoint.Y)
-	case sizingInner:
+	case sizingContain:
 		scale = min(scalePoint.X, scalePoint.Y)
 	case sizingByWidth:
 		scale = scalePoint.X
 	case sizingByHeight:
 		scale = scalePoint.Y
+	case sizingStretch:
 	default:
 		err = fmt.Errorf("unknown getTargetSize mode %s", mode.sizing)
 		return

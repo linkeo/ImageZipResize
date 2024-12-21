@@ -54,7 +54,7 @@ func predictResizedExt(file string, desire image.Point, mode Mode) (string, erro
 	if err != nil {
 		return "", err
 	}
-	if resized.Opaque() {
+	if almostOpaque(resized) {
 		return extJPEG, nil
 	}
 	return extPNG, nil
