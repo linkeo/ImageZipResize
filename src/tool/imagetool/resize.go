@@ -49,7 +49,7 @@ func (m Mode) DoNotEnlarge() Mode {
 	return m
 }
 
-func Resize(base string, filename string, isCover bool, to image.Point, mode Mode) (float64, error) {
+func Resize(base string, filename string, isCover bool, to image.Point, mode Mode, mem system.ByteSize) (float64, error) {
 	if IsResizedPath(filename) {
 		return 0, errors.New("file is already resized")
 	}
@@ -59,7 +59,7 @@ func Resize(base string, filename string, isCover bool, to image.Point, mode Mod
 	if !IsImageFile(filename) {
 		return 0, errors.New("file is not an image")
 	}
-	return resizeMagick(base, filename, isCover, to, mode)
+	return resizeMagick(base, filename, isCover, to, mode, mem)
 	//isGif, err := isGifImage(filename)
 	//if err != nil {
 	//	return 0, err
@@ -151,7 +151,7 @@ func resizeGif(reader io.Reader, to image.Point, mode Mode) (ImageWriter, error)
 	return newGIFWriter(img), nil
 }
 
-func resizeMagick(base string, filename string, isCover bool, to image.Point, mode Mode) (float64, error) {
+func resizeMagick(base string, filename string, isCover bool, to image.Point, mode Mode, mem system.ByteSize) (float64, error) {
 	ext := extWEBP
 	if isCover {
 		ext = path.Ext(filename)
@@ -164,9 +164,9 @@ func resizeMagick(base string, filename string, isCover bool, to image.Point, mo
 	}
 	defer os.RemoveAll(tmp)
 	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("MAGICK_MEMORY_LIMIT=%s", system.GetMemoryLimit()),
-		fmt.Sprintf("MAGICK_MAP_LIMIT=%s", system.GetMemoryLimit()),
-		fmt.Sprintf("MAGICK_DISK_LIMIT=%s", system.GetMemoryLimit()),
+		fmt.Sprintf("MAGICK_MEMORY_LIMIT=%s", mem),
+		fmt.Sprintf("MAGICK_MAP_LIMIT=%s", mem),
+		fmt.Sprintf("MAGICK_DISK_LIMIT=%s", mem),
 		fmt.Sprintf("MAGICK_TEMPORARY_PATH=%s", tmp))
 	//log.Printf("command: %s", strings.Join(cmd.Args, " "))
 	if err := cmd.Run(); err != nil {

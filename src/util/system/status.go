@@ -12,6 +12,7 @@ import (
 
 var parallel uint64 = 4
 var memoryLimit uint64 = 256 * 1024 * 1024
+var memoryAvailable uint64 = 1024 * 1024 * 1024
 
 type ByteSize uint64
 
@@ -39,10 +40,10 @@ func init() {
 	if !allowParallel() {
 		threads = 1
 	}
-	available := GetAvailableMemory() / 2
-	memoryPerCore := available / threads
+	memoryAvailable = GetAvailableMemory() / 2
+	memoryPerCore := memoryAvailable / threads
 	if memoryPerCore < memoryLimit {
-		parallel = max(1, available/memoryLimit)
+		parallel = max(1, memoryAvailable/memoryLimit)
 	} else {
 		memoryLimit = memoryPerCore
 		parallel = threads
@@ -68,6 +69,10 @@ func GetParallelism() uint64 {
 
 func GetMemoryLimit() ByteSize {
 	return ByteSize(memoryLimit)
+}
+
+func GetMemoryAvailable() ByteSize {
+	return ByteSize(memoryAvailable)
 }
 
 func GetCpuCores() uint64 {

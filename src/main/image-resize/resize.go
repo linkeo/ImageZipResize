@@ -2,11 +2,13 @@ package main
 
 import (
 	"ImageZipResize/tool/imagetool"
+	"ImageZipResize/util"
 	"ImageZipResize/util/concurrent"
 	"ImageZipResize/util/fileutil"
 	"ImageZipResize/util/filters"
 	"ImageZipResize/util/slices"
 	"ImageZipResize/util/system"
+	"context"
 	"fmt"
 	"image"
 	"log"
@@ -24,6 +26,7 @@ type entry struct {
 	root    string
 	file    string
 	isCover bool
+	mem     system.ByteSize
 }
 
 func collect(files []string, dirs []string) ([]entry, map[string]struct{}) {
@@ -73,6 +76,13 @@ func arrange(entries []entry) []entry {
 	return entries
 }
 
+var total int64 = 1
+var totalWidth = 1
+var todoAtomic = new(atomic.Int64)
+var indexAtomic = new(atomic.Int64)
+var doneAtomic = new(atomic.Int64)
+var timeWindow *util.TimeWindow
+
 func main() {
 	args := slices.Filter(os.Args[1:], func(value string) bool {
 		return !strings.HasPrefix(value, "--")
@@ -88,49 +98,84 @@ func main() {
 	entries, roots := collect(files, dirs)
 	entries = arrange(entries)
 
-	total := len(entries)
-	todoAtomic := new(atomic.Int64)
+	total = int64(len(entries))
+	totalWidth = len(fmt.Sprintf("%d", total))
 	todoAtomic.Store(int64(total))
-	indexAtomic := new(atomic.Int64)
 	indexAtomic.Store(0)
-	doneAtomic := new(atomic.Int64)
 	doneAtomic.Store(0)
-	// update title by cmd := exec.Command("cmd", "/C", "title", "your_title_here")
-	width := len(fmt.Sprintf("%d", total))
+
 	par := system.GetParallelism()
-	mem := system.GetMemoryLimit()
-	log.Printf("resize %d images with parallelism %d, each with %s memory limit.", total, par, mem)
-	startTime := time.Now()
-	eta := func(delta int64) time.Duration {
-		dn := doneAtomic.Add(delta)
-		if dn == 0 {
-			return time.Minute
-		}
-		td := todoAtomic.Add(-1)
-		now := time.Now()
-		elapsed := now.Sub(startTime)
-		left := elapsed * time.Duration(td) / time.Duration(dn)
-		return left.Truncate(time.Second)
+	memoryLimit := system.GetMemoryLimit()
+	timeWindow = util.NewTimeWindow(int(par*2), time.Second)
+
+	if total == 0 {
+		return
 	}
+	defer time.Sleep(time.Second)
+
+	timeWindow.Append(time.Now())
+	stopTitleLoop := startUpdateTitleLoop()
+	defer stopTitleLoop()
+
 	defer func() {
 		for root := range roots {
 			os.RemoveAll(fileutil.GetCacheDir(root))
 		}
 	}()
+
+	failedEntries := make([]entry, 0)
+	failedChan := make(chan entry, int(par))
+	doneChan := make(chan struct{})
+	go func() {
+		for entry := range failedChan {
+			failedEntries = append(failedEntries, entry)
+		}
+		close(doneChan)
+	}()
+
+	log.Printf("resize %d images with parallelism %d, each with %s memory limit.", total, par, memoryLimit)
 	concurrent.ForEach(entries, func(en entry) {
 		i := indexAtomic.Add(1)
-		tag := fmt.Sprintf("%*d/%d", width, i, total)
-		resize(tag, en, eta)
+		tag := fmt.Sprintf("%*d/%d", totalWidth, i, total)
+		en.mem = memoryLimit
+		if !resize(tag, en) {
+			failedChan <- en
+		}
 	}, int(par))
+
+	close(failedChan)
+	<-doneChan
+
+	failed := int64(len(failedEntries))
+	if failed == 0 {
+		return
+	}
+
+	memoryAvailable := system.GetMemoryAvailable()
+	log.Printf("resize %d failed images sequentially, each with %s memory limit.", failed, memoryAvailable)
+	timeWindow.Reset()
+	timeWindow.SetDefaultAverage(10 * time.Second)
+	timeWindow.Append(time.Now())
+	todoAtomic.Store(failed)
+	failedBase := total - failed + 1
+	for i, en := range failedEntries {
+		tag := fmt.Sprintf("%*d/%d", totalWidth, failedBase+int64(i), total)
+		en.mem = memoryAvailable
+		resize(tag, en)
+	}
 }
 
-func resize(tag string, en entry, eta func(int64) time.Duration) {
-	result, err := imagetool.Resize(en.root, en.file, en.isCover, resizeTarget, imagetool.ModeContain.DoNotEnlarge())
+func resize(tag string, en entry) bool {
+	result, err := imagetool.Resize(en.root, en.file, en.isCover, resizeTarget, imagetool.ModeContain.DoNotEnlarge(), en.mem)
+	todoAtomic.Add(-1)
 	if err != nil {
-		log.Printf("[%s] %s resize failed, %s, %s, ETA %s", tag, resizeTarget, en.file, err, eta(0))
-	} else {
-		log.Printf("[%s] %s resize %7s, %s, ETA %s", tag, resizeTarget, compressRate(result), en.file, eta(1))
+		log.Printf("[%s] %s resize failed, %s, %s, ETA %s", tag, resizeTarget, en.file, err, eta())
+		return false
 	}
+	timeWindow.Append(time.Now())
+	doneAtomic.Add(1)
+	log.Printf("[%s] %s resize %7s, %s, ETA %s", tag, resizeTarget, compressRate(result), en.file, eta())
+	return true
 }
 
 func compressRate(rate float64) string {
@@ -142,4 +187,44 @@ func compressRate(rate float64) string {
 		return fmt.Sprintf("%.2f%%", deltaPercent)
 	}
 	return fmt.Sprintf("+%.2f%%", deltaPercent)
+}
+
+func eta() time.Duration {
+	avg := timeWindow.Average()
+	td := todoAtomic.Load()
+	left := time.Duration(td) * avg
+	return left.Truncate(time.Second)
+}
+
+func updateTitle() {
+	nextTime := time.Now().Add(100 * time.Millisecond)
+	done := doneAtomic.Load()
+	title := fmt.Sprintf("[%d/%d] [ETA:%s] Image Resize", done, total, eta())
+	percent := 100 * done / total
+	fmt.Printf("\033]9;4;1;%d\a", percent)
+	fmt.Printf("\033]0;%s\a", title)
+	time.Sleep(nextTime.Sub(time.Now()))
+}
+
+func startUpdateTitleLoop() func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan struct{})
+	go updateTitleLoop(ctx, doneCh)
+	return func() {
+		cancel()
+		<-doneCh
+	}
+}
+
+func updateTitleLoop(ctx context.Context, doneCh chan struct{}) {
+	defer close(doneCh)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			updateTitle()
+		}
+	}
 }
